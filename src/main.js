@@ -1,1 +1,1 @@
-console.log('app start')
+let running=false;let tick=0;const btn=document.getElementById('runBtn');const tickEl=document.getElementById('tickValue');btn.onclick=()=>{running=!running;if(running){loop()} };function loop(){if(!running)return;tick++;tickEl.textContent=tick;requestAnimationFrame(loop)}

@@ -23,6 +23,7 @@ export function createInitialWorld({seed,climateMode='temperate'}){
     random,
     tick:0,
     splitCounter:0,
+    lastSplitTick:-999,
     environment:{
       climateMode,
       climateLabel:climateLabelMap[climateMode],
@@ -41,6 +42,7 @@ export function createInitialWorld({seed,climateMode='temperate'}){
         population:80-index*8,
         x,y,vx:(random()-.5)*2,vy:(random()-.5)*2,
         targetX:x,targetY:y,
+        lastSplitTick:-999,
         agents:createAgents(random,clamp(Math.round((80-index*8)/8),3,22),x,y)
       }
     }),
@@ -53,6 +55,42 @@ export function createInitialWorld({seed,climateMode='temperate'}){
 function recordHistory(world){
   world.history.push({tick:world.tick,species:world.species.map(s=>({id:s.id,name:s.name,population:s.population,color:s.color}))})
   if(world.history.length>80)world.history.shift()
+}
+
+function applyEcologyFeedback(world){
+  const env=world.environment
+  const totalPopulation=world.species.reduce((sum,s)=>sum+s.population,0)
+  const grazerLoad=world.species.filter(s=>s.lineage==='grazer'||s.id==='grazer').reduce((sum,s)=>sum+s.population,0)
+  const predatorLoad=world.species.filter(s=>s.lineage==='predator'||s.id==='predator').reduce((sum,s)=>sum+s.population,0)
+  const scavengerLoad=world.species.filter(s=>s.lineage==='scavenger'||s.id==='scavenger').reduce((sum,s)=>sum+s.population,0)
+  const parasiteLoad=world.species.filter(s=>s.lineage==='parasite'||s.id==='parasite').reduce((sum,s)=>sum+s.population,0)
+
+  env.resources=clamp(
+    env.resources
+      - grazerLoad*0.045
+      - totalPopulation*0.01
+      + scavengerLoad*0.015,
+    8,140
+  )
+
+  env.hazard=clamp(
+    env.hazard
+      + parasiteLoad*0.01
+      + predatorLoad*0.003
+      - scavengerLoad*0.006,
+    5,40
+  )
+
+  env.humidity=clamp(
+    env.humidity
+      - grazerLoad*0.01
+      + scavengerLoad*0.004,
+    5,95
+  )
+
+  env.mutationRate=clamp(0.04+env.hazard/300+(env.climateMode==='volatile'?0.03:0)+Math.max(0,80-env.resources)/1200,0.04,0.2)
+
+  return `生态反馈：草食负载 ${Math.round(grazerLoad)}，捕食负载 ${Math.round(predatorLoad)}，寄生负载 ${Math.round(parasiteLoad)}，资源回调至 ${env.resources.toFixed(0)}。`
 }
 
 function updateEnvironment(world){
@@ -108,10 +146,14 @@ function applyMutation(world,species){
 function maybeSplitSpecies(world){
   const logs=[]
   const newborn=[]
+  if(world.species.length>=8) return logs
+  if(world.tick-world.lastSplitTick<20) return logs
   for(const species of world.species){
-    if(species.population<120)continue
-    if(world.environment.hazard<18)continue
-    if(world.random()>0.06)continue
+    if(world.species.length+newborn.length>=8) break
+    if(species.population<150)continue
+    if(world.environment.hazard<24)continue
+    if(world.tick-species.lastSplitTick<35)continue
+    if(world.random()>0.025)continue
     const traits=species.traits
     const divergence=Math.max(
       Math.abs(traits.speed-50),
@@ -119,15 +161,17 @@ function maybeSplitSpecies(world){
       Math.abs(traits.resistance-50),
       Math.abs(traits.aggression-50)
     )
-    if(divergence<18)continue
+    if(divergence<24)continue
     world.splitCounter+=1
     const childId=`${species.id}_split_${world.splitCounter}`
     const childName=`${species.name}·分支${world.splitCounter}`
-    const popShare=Math.max(18,Math.round(species.population*0.28))
+    const popShare=Math.max(20,Math.round(species.population*0.2))
     species.population=clamp(species.population-popShare,0,240)
+    species.lastSplitTick=world.tick
+    world.lastSplitTick=world.tick
     const childTraits=JSON.parse(JSON.stringify(species.traits))
     const key=['speed','camouflage','fertility','metabolism','resistance','aggression'][Math.floor(world.random()*6)]
-    childTraits[key]=mutateTrait(childTraits[key],world.random()<0.5?-8:8)
+    childTraits[key]=mutateTrait(childTraits[key],world.random()<0.5?-6:6)
     const x=clamp(species.x+(world.random()-.5)*120,80,820)
     const y=clamp(species.y+(world.random()-.5)*120,80,440)
     newborn.push({
@@ -135,14 +179,15 @@ function maybeSplitSpecies(world){
       lineage:species.lineage||species.id,
       name:childName,
       role:`${species.role} / 谱系分裂`,
-      color:shiftColor(species.color,world.random()<0.5?-24:24),
+      color:shiftColor(species.color,world.random()<0.5?-18:18),
       traits:childTraits,
       population:popShare,
       x,y,vx:(world.random()-.5)*2,vy:(world.random()-.5)*2,
       targetX:x,targetY:y,
+      lastSplitTick:world.tick,
       agents:createAgents(world.random,clamp(Math.round(popShare/8),3,22),x,y)
     })
-    logs.push(`物种分裂：${species.name} 在高风险环境下分化出新谱系 ${childName}。`)
+    logs.push(`物种分裂：${species.name} 在高风险且高密度条件下分化出新谱系 ${childName}。`)
   }
   if(newborn.length)world.species.push(...newborn)
   return logs
@@ -279,12 +324,13 @@ function resolvePopulation(world){
 
 export function stepWorld(world,strategyProvider){
   world.tick+=1
-  const environmentNarrative=updateEnvironment(world)
+  const environmentNarrativeBase=updateEnvironment(world)
+  const ecologyNarrative=applyEcologyFeedback(world)
   const speciesNarratives=[]
   speciesNarratives.push(...applyStrategies(world,strategyProvider))
   speciesNarratives.push(...resolveGameInteractions(world))
   speciesNarratives.push(...resolvePopulation(world))
   speciesNarratives.push(...maybeSplitSpecies(world))
   recordHistory(world)
-  return{environmentNarrative,speciesNarratives}
+  return{environmentNarrative:`${environmentNarrativeBase}；${ecologyNarrative}`,speciesNarratives}
 }

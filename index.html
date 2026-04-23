@@ -1,1 +1,123 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Evolution Sandbox</title></head><body><h1>Loading...</h1><script src="./src/main.js" type="module"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Evolution Sandbox</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">EVO</div>
+        <div>
+          <h1>Evolution Sandbox</h1>
+          <p>多 Agent 生物进化模拟器（静态预览版）</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>世界控制</h2>
+        <label>随机种子
+          <input id="seedInput" type="number" value="42" />
+        </label>
+        <label>环境模式
+          <select id="climateSelect">
+            <option value="temperate">温和</option>
+            <option value="drought">干旱</option>
+            <option value="cold">寒冷</option>
+            <option value="volatile">剧烈波动</option>
+          </select>
+        </label>
+        <label>每步速度
+          <input id="speedRange" type="range" min="200" max="1600" step="100" value="700" />
+        </label>
+        <div class="btn-row">
+          <button id="initBtn">初始化世界</button>
+          <button id="stepBtn" class="secondary">单步演化</button>
+        </div>
+        <div class="btn-row">
+          <button id="runBtn">开始自动运行</button>
+          <button id="pauseBtn" class="secondary">暂停</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>LLM 策略</h2>
+        <label class="checkbox">
+          <input id="useMockLlm" type="checkbox" checked />
+          启用 Mock LLM 决策层
+        </label>
+        <p class="muted">
+          当前为纯前端静态实现：默认使用内置 Mock LLM / 规则策略。
+          后续可接 OpenRouter / Gemini / 任意兼容 OpenAI 的代理接口。
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>物种配置</h2>
+        <div id="speciesEditor"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="hero">
+        <div>
+          <h2>开放式生态演化预览</h2>
+          <p>
+            环境 Agent 负责施加选择压力，物种 Agent 输出演化偏好，规则引擎执行资源结算、繁殖、死亡与突变。
+          </p>
+        </div>
+        <div class="hero-stats">
+          <div class="stat">
+            <span>Tick</span>
+            <strong id="tickValue">0</strong>
+          </div>
+          <div class="stat">
+            <span>气候</span>
+            <strong id="climateValue">-</strong>
+          </div>
+          <div class="stat">
+            <span>资源</span>
+            <strong id="resourceValue">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-grid">
+        <div class="card canvas-card">
+          <div class="card-header">
+            <h3>生态地图</h3>
+            <span id="worldSummary" class="muted"></span>
+          </div>
+          <canvas id="worldCanvas" width="900" height="520"></canvas>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>环境日志</h3>
+          </div>
+          <div id="envLog" class="log"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>物种策略日志</h3>
+          </div>
+          <div id="speciesLog" class="log"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>种群趋势</h3>
+          </div>
+          <canvas id="trendCanvas" width="900" height="280"></canvas>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

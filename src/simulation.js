@@ -9,9 +9,9 @@ const speciesPresets=[
 
 function clamp(n,min,max){return Math.max(min,Math.min(max,n))}
 function mutateTrait(value,delta){return clamp(value+delta,1,99)}
-function randomRange(r,min,max){return min+(max-min)*r()}
 function createAgents(r,count,x,y){return Array.from({length:count},()=>({x:x+(r()-.5)*80,y:y+(r()-.5)*80,vx:(r()-.5)*1.4,vy:(r()-.5)*1.4}))}
 function avgPos(agents){if(!agents.length)return{x:0,y:0};const s=agents.reduce((a,b)=>{a.x+=b.x;a.y+=b.y;return a},{x:0,y:0});return{x:s.x/agents.length,y:s.y/agents.length}}
+function shiftColor(hex,delta){const h=hex.replace('#','');let n=parseInt(h,16);let r=(n>>16)&255,g=(n>>8)&255,b=n&255;r=clamp(r+delta,0,255);g=clamp(g+delta/2,0,255);b=clamp(b-delta/3,0,255);return '#'+[r,g,b].map(v=>Math.round(v).toString(16).padStart(2,'0')).join('')}
 
 export function getSpeciesPresets(){return speciesPresets}
 
@@ -22,6 +22,7 @@ export function createInitialWorld({seed,climateMode='temperate'}){
     seed,
     random,
     tick:0,
+    splitCounter:0,
     environment:{
       climateMode,
       climateLabel:climateLabelMap[climateMode],
@@ -36,6 +37,7 @@ export function createInitialWorld({seed,climateMode='temperate'}){
       const y=170+index*60
       return {
         ...JSON.parse(JSON.stringify(preset)),
+        lineage:preset.id,
         population:80-index*8,
         x,y,vx:(random()-.5)*2,vy:(random()-.5)*2,
         targetX:x,targetY:y,
@@ -100,6 +102,49 @@ function applyMutation(world,species){
     species.traits[key]=mutateTrait(species.traits[key],delta)
     logs.push(`突变：${species.name} 的 ${key} ${delta>0?'增强':'减弱'}。`)
   }
+  return logs
+}
+
+function maybeSplitSpecies(world){
+  const logs=[]
+  const newborn=[]
+  for(const species of world.species){
+    if(species.population<120)continue
+    if(world.environment.hazard<18)continue
+    if(world.random()>0.06)continue
+    const traits=species.traits
+    const divergence=Math.max(
+      Math.abs(traits.speed-50),
+      Math.abs(traits.camouflage-50),
+      Math.abs(traits.resistance-50),
+      Math.abs(traits.aggression-50)
+    )
+    if(divergence<18)continue
+    world.splitCounter+=1
+    const childId=`${species.id}_split_${world.splitCounter}`
+    const childName=`${species.name}·分支${world.splitCounter}`
+    const popShare=Math.max(18,Math.round(species.population*0.28))
+    species.population=clamp(species.population-popShare,0,240)
+    const childTraits=JSON.parse(JSON.stringify(species.traits))
+    const key=['speed','camouflage','fertility','metabolism','resistance','aggression'][Math.floor(world.random()*6)]
+    childTraits[key]=mutateTrait(childTraits[key],world.random()<0.5?-8:8)
+    const x=clamp(species.x+(world.random()-.5)*120,80,820)
+    const y=clamp(species.y+(world.random()-.5)*120,80,440)
+    newborn.push({
+      id:childId,
+      lineage:species.lineage||species.id,
+      name:childName,
+      role:`${species.role} / 谱系分裂`,
+      color:shiftColor(species.color,world.random()<0.5?-24:24),
+      traits:childTraits,
+      population:popShare,
+      x,y,vx:(world.random()-.5)*2,vy:(world.random()-.5)*2,
+      targetX:x,targetY:y,
+      agents:createAgents(world.random,clamp(Math.round(popShare/8),3,22),x,y)
+    })
+    logs.push(`物种分裂：${species.name} 在高风险环境下分化出新谱系 ${childName}。`)
+  }
+  if(newborn.length)world.species.push(...newborn)
   return logs
 }
 
@@ -188,11 +233,11 @@ function moveSpecies(world,s){
   const noiseY=(world.random()-.5)*20
   if(s.id==='predator'&&grazer){
     tx=grazer.x+noiseX;ty=grazer.y+noiseY
-  }else if(s.id==='grazer'&&predator){
+  }else if((s.id==='grazer'||s.lineage==='grazer')&&predator){
     tx=s.x-(predator.x-s.x)*.55+noiseX;ty=s.y-(predator.y-s.y)*.55+noiseY
-  }else if(s.id==='scavenger'){
+  }else if(s.id==='scavenger'||s.lineage==='scavenger'){
     tx=(world.environment.resources>80?420:650)+noiseX;ty=260+noiseY
-  }else if(s.id==='parasite'&&grazer&&predator){
+  }else if((s.id==='parasite'||s.lineage==='parasite')&&grazer&&predator){
     tx=((grazer.x+predator.x)/2)+noiseX;ty=((grazer.y+predator.y)/2)+noiseY
   }else{
     tx+=noiseX;ty+=noiseY
@@ -239,6 +284,7 @@ export function stepWorld(world,strategyProvider){
   speciesNarratives.push(...applyStrategies(world,strategyProvider))
   speciesNarratives.push(...resolveGameInteractions(world))
   speciesNarratives.push(...resolvePopulation(world))
+  speciesNarratives.push(...maybeSplitSpecies(world))
   recordHistory(world)
   return{environmentNarrative,speciesNarratives}
 }

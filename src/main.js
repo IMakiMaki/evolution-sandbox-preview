@@ -19,9 +19,13 @@ const useMockLlm = document.getElementById('useMockLlm')
 const speciesEditor = document.getElementById('speciesEditor')
 const envLog = document.getElementById('envLog')
 const speciesLog = document.getElementById('speciesLog')
+const eventCards = document.getElementById('eventCards')
+const speciesDetail = document.getElementById('speciesDetail')
 
 let running = false
 let lastSim = 0
+let selectedSpeciesId = null
+let previousSnapshot = new Map()
 let world = createWorldFromControls()
 
 function clamp(value, min, max) {
@@ -35,6 +39,32 @@ function average(field) {
 function pseudoNoise(seed, tick, index) {
   const x = Math.sin(seed * 12.9898 + tick * 78.233 + index * 37.719) * 43758.5453
   return x - Math.floor(x)
+}
+
+function lineageOf(species) {
+  return species?.lineage || species?.id || 'unknown'
+}
+
+function phenotypeTags(species) {
+  const traits = species?.traits || {}
+  const tags = []
+  if ((traits.speed || 0) > 65) tags.push('长尾高速')
+  if ((traits.aggression || 0) > 62) tags.push('尖刺口器')
+  if ((traits.resistance || 0) > 62) tags.push('厚甲')
+  if ((traits.camouflage || 0) > 62) tags.push('拟态纹')
+  if ((traits.fertility || 0) > 72) tags.push('群聚繁殖')
+  if ((traits.metabolism || 0) > 68) tags.push('高代谢')
+  if (tags.length === 0) tags.push('基础表型')
+  return tags
+}
+
+function snapshotWorld(world) {
+  previousSnapshot = new Map(world.species.map(species => [species.id, {
+    population: species.population,
+    traits: { ...species.traits },
+    extinct: species.extinct,
+    tier: species.tier
+  }]))
 }
 
 function applyClimatePreset(world) {
@@ -111,6 +141,28 @@ function carryingCapacityFor(species, env) {
   return clamp(24 + carrion * 1.5 + flora * 0.35 + complexity * 0.55 - hazard * 0.2, 12, 200)
 }
 
+function intensifyLateGameEvolution(world) {
+  if (world.tick < 35) return []
+  const messages = []
+  const env = world.environment
+  const pressure = clamp((env.hazard || 0) / 45 + Math.max(0, 65 - (env.resources || 0)) / 55 + (env.complexity || 0) / 90, 0.2, 3.2)
+
+  for (let index = 0; index < world.species.length; index += 1) {
+    const species = world.species[index]
+    if (!species || species.extinct || species.population <= 0) continue
+    const chance = 0.025 + pressure * 0.018 + (species.tier || 0) * 0.004
+    if (pseudoNoise(world.seed, world.tick, index + 401) > chance) continue
+
+    const traitKeys = ['speed', 'camouflage', 'fertility', 'metabolism', 'resistance', 'aggression']
+    const key = traitKeys[Math.floor(pseudoNoise(world.seed, world.tick, index + 503) * traitKeys.length)]
+    const direction = pseudoNoise(world.seed, world.tick, index + 607) > 0.42 ? 1 : -1
+    const amount = Math.round(2 + pressure + pseudoNoise(world.seed, world.tick, index + 701) * 3)
+    species.traits[key] = clamp((species.traits[key] || 50) + direction * amount, 1, 99)
+    messages.push(`持续选择压力：L${species.tier} ${species.name} 的 ${key} ${direction > 0 ? '+' : '-'}${amount}，表型偏向 ${phenotypeTags(species).join('、')}。`)
+  }
+  return messages
+}
+
 function applyPopulationDynamics(world) {
   const env = world.environment
   const season = Math.sin(world.tick / 17)
@@ -158,6 +210,30 @@ function applyPopulationDynamics(world) {
   return messages
 }
 
+function classifyEvent(text) {
+  if (/分裂|分化/.test(text)) return ['物种分裂', '谱系结构发生改变，新的分支开始独立竞争。']
+  if (/环境孕育|诞生/.test(text)) return ['环境孕育', '局部生态场达成条件，新生命从环境中出现。']
+  if (/突变|选择压力/.test(text)) return ['表型突变', '基因值发生变化，外形标签和行为倾向可能改变。']
+  if (/围猎|击杀|死亡|灭绝/.test(text)) return ['生存事件', '个体死亡或捕食行为改变了种群结构。']
+  if (/生态扰动|灾变|压力|冲击/.test(text)) return ['环境扰动', '环境场产生波动，推动种群重新洗牌。']
+  return ['演化记录', '系统状态发生了可观察变化。']
+}
+
+function pushEventCard(text, speciesId = null) {
+  if (!eventCards || !text) return
+  const [title, desc] = classifyEvent(text)
+  const card = document.createElement('div')
+  card.className = 'evo-card'
+  card.innerHTML = `
+    <strong>${title}</strong>
+    <p>${text}</p>
+    <div class="evo-meta"><span>Tick ${world.tick}</span><span>${desc}</span></div>
+  `
+  if (speciesId) card.onclick = () => { selectedSpeciesId = speciesId; renderSpeciesDetail() }
+  eventCards.prepend(card)
+  while (eventCards.children.length > 18) eventCards.removeChild(eventCards.lastChild)
+}
+
 function pushLog(container, text) {
   if (!container || !text) return
   const item = document.createElement('div')
@@ -170,6 +246,7 @@ function pushLog(container, text) {
 function clearLogs() {
   envLog.innerHTML = ''
   speciesLog.innerHTML = ''
+  if (eventCards) eventCards.innerHTML = ''
 }
 
 function renderSpeciesEditor() {
@@ -186,6 +263,54 @@ function renderSpeciesEditor() {
   `).join('')
 }
 
+function mostActiveSpecies() {
+  let best = world.species.find(species => !species.extinct && species.population > 0)
+  let bestScore = -Infinity
+  for (const species of world.species) {
+    if (!species || species.extinct || species.population <= 0) continue
+    const prev = previousSnapshot.get(species.id)
+    const populationChange = Math.abs(species.population - (prev?.population ?? species.population))
+    const traitChange = Object.entries(species.traits || {}).reduce((sum, [key, value]) => sum + Math.abs(value - (prev?.traits?.[key] ?? value)), 0)
+    const score = populationChange * 2 + traitChange + (species.splitProgress || 0) * 0.25 + (species.tier || 0)
+    if (score > bestScore) {
+      bestScore = score
+      best = species
+    }
+  }
+  return best
+}
+
+function renderSpeciesDetail() {
+  if (!speciesDetail) return
+  const species = world.species.find(item => item.id === selectedSpeciesId && !item.extinct) || mostActiveSpecies()
+  if (!species) {
+    speciesDetail.innerHTML = '<p class="muted">暂无存活物种。</p>'
+    return
+  }
+  selectedSpeciesId = species.id
+  const tags = phenotypeTags(species)
+  const traits = species.traits || {}
+  const rows = Object.entries(traits).map(([key, value]) => `
+    <div class="trait-row">
+      <span>${key}</span>
+      <div class="trait-bar"><span style="width:${clamp(value, 0, 99)}%"></span></div>
+      <b>${Math.round(value)}</b>
+    </div>
+  `).join('')
+  speciesDetail.innerHTML = `
+    <div class="detail-head">
+      <div class="detail-avatar" style="background:${species.color}">L${species.tier}</div>
+      <div class="detail-title">
+        <strong>${species.name}</strong>
+        <span>${species.role || ''}</span>
+      </div>
+    </div>
+    <div class="muted">谱系：${lineageOf(species)} ｜ 种群：${species.population} ｜ 分裂进度：${Math.round(species.splitProgress || 0)}</div>
+    <div class="tag-row">${tags.map(tag => `<span class="tag">${tag}</span>`).join('')}</div>
+    <div class="trait-grid">${rows}</div>
+  `
+}
+
 function updateHud() {
   const env = world.environment
   tickEl.textContent = world.tick
@@ -199,16 +324,28 @@ function updateHud() {
 
 function renderAll() {
   updateHud()
+  renderSpeciesDetail()
   drawWorld(canvas, world)
   drawTrend(trendCanvas, world.history)
 }
 
 function stepOnce() {
+  snapshotWorld(world)
   const result = stepWorld(world, currentProvider())
   const dynamicsNarratives = applyPopulationDynamics(world)
+  const pressureNarratives = intensifyLateGameEvolution(world)
+  const allNarratives = [...result.speciesNarratives, ...dynamicsNarratives, ...pressureNarratives]
   pushLog(envLog, result.environmentNarrative)
-  for (const item of result.speciesNarratives) pushLog(speciesLog, item)
-  for (const item of dynamicsNarratives) pushLog(speciesLog, item)
+  for (const item of allNarratives) {
+    pushLog(speciesLog, item)
+    if (/分裂|分化|环境孕育|诞生|突变|选择压力|生态扰动|围猎|击杀|死亡|灭绝/.test(item)) {
+      pushEventCard(item)
+    }
+  }
+  const latest = world.history[world.history.length - 1]
+  if (latest) {
+    latest.species = world.species.map(species => ({ id: species.id, name: species.name, population: species.population, color: species.color }))
+  }
   renderAll()
 }
 
@@ -223,9 +360,12 @@ function loop(timestamp) {
 function resetWorld() {
   running = false
   world = createWorldFromControls()
+  previousSnapshot = new Map()
+  selectedSpeciesId = null
   lastSim = 0
   clearLogs()
   pushLog(envLog, `初始化世界：种子 ${seedInput.value || 42}，气候 ${climateSelect.options[climateSelect.selectedIndex]?.text || climateSelect.value}。`)
+  pushEventCard('世界初始化：环境场、生命等级和初始生态链已生成。')
   renderAll()
 }
 
@@ -252,4 +392,6 @@ useMockLlm.onchange = () => {
 }
 
 renderSpeciesEditor()
+snapshotWorld(world)
+pushEventCard('世界初始化：环境场、生命等级和初始生态链已生成。')
 renderAll()

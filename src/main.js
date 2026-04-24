@@ -32,6 +32,11 @@ function average(field) {
   return field.reduce((sum, value) => sum + value, 0) / Math.max(1, field.length)
 }
 
+function pseudoNoise(seed, tick, index) {
+  const x = Math.sin(seed * 12.9898 + tick * 78.233 + index * 37.719) * 43758.5453
+  return x - Math.floor(x)
+}
+
 function applyClimatePreset(world) {
   const env = world.environment
   const fields = env.fields
@@ -92,6 +97,67 @@ function currentInterval() {
   return clamp(1800 - slider, 80, 1600)
 }
 
+function carryingCapacityFor(species, env) {
+  const flora = env.resourcePools?.flora || env.resources || 0
+  const spores = env.resourcePools?.spores || 0
+  const carrion = env.resourcePools?.carrion || 0
+  const complexity = env.complexity || 0
+  const hazard = env.hazard || 0
+
+  if (species.tier === 0) return clamp(60 + env.humidity * 1.1 + complexity * 0.35 - hazard * 0.18, 35, 230)
+  if (species.tier === 1) return clamp(32 + spores * 1.8 + complexity * 0.55 - hazard * 0.12, 20, 210)
+  if (species.lineage === 'grazer') return clamp(30 + flora * 1.65 + env.humidity * 0.2 - hazard * 0.45, 15, 220)
+  if (species.lineage === 'predator') return clamp(18 + carrion * 2.4 + complexity * 0.45 + Math.max(0, flora - 45) * 0.1, 8, 155)
+  return clamp(24 + carrion * 1.5 + flora * 0.35 + complexity * 0.55 - hazard * 0.2, 12, 200)
+}
+
+function applyPopulationDynamics(world) {
+  const env = world.environment
+  const season = Math.sin(world.tick / 17)
+  const shockChance = env.climateMode === 'volatile' ? 0.11 : env.climateMode === 'drought' ? 0.07 : 0.035
+  const shock = pseudoNoise(world.seed, Math.floor(world.tick / 9), 99) < shockChance
+  const shockSign = pseudoNoise(world.seed, world.tick, 111) > 0.62 ? 1 : -1
+  const messages = []
+
+  for (let index = 0; index < world.species.length; index += 1) {
+    const species = world.species[index]
+    if (!species || species.extinct || species.population <= 0) continue
+
+    const previous = species.populationFloat ?? species.population
+    const capacity = carryingCapacityFor(species, env)
+    const densityPressure = Math.max(0, previous - capacity) * 0.075
+    const underCapacityBoost = Math.max(0, capacity - previous) * 0.018
+    const seasonalEffect = season * (species.tier === 0 ? 2.4 : species.lineage === 'grazer' ? 2.0 : species.lineage === 'predator' ? -1.2 : 1.4)
+    const chaos = (pseudoNoise(world.seed, world.tick, index) - 0.5) * (2.4 + env.hazard / 28)
+    const pulse = pseudoNoise(world.seed, Math.floor(world.tick / 5), index + 7) > 0.84 ? 2 + species.traits.fertility / 42 : 0
+    const hazardLoss = Math.max(0, env.hazard - species.traits.resistance) * 0.035
+    const resourceLoss = species.lineage === 'grazer' ? Math.max(0, 42 - (env.resourcePools?.flora || 0)) * 0.1 : 0
+    const shockEffect = shock ? shockSign * (species.tier === 0 ? 2.5 : species.tier === 3 ? 1.3 : 2.0) : 0
+
+    const delta = underCapacityBoost + seasonalEffect + chaos + pulse + shockEffect - densityPressure - hazardLoss - resourceLoss
+    species.populationFloat = clamp(previous + delta, 0, 240)
+    species.population = Math.round(species.populationFloat)
+
+    if (species.population <= 0) {
+      species.extinct = true
+      species.agents = []
+    }
+  }
+
+  const latest = world.history[world.history.length - 1]
+  if (latest) {
+    latest.species = world.species.map(species => ({
+      id: species.id,
+      name: species.name,
+      population: species.population,
+      color: species.color
+    }))
+  }
+
+  if (shock) messages.push(shockSign > 0 ? '生态扰动：短期资源窗口让部分种群反弹。' : '生态扰动：环境压力造成多种群同步下滑。')
+  return messages
+}
+
 function pushLog(container, text) {
   if (!container || !text) return
   const item = document.createElement('div')
@@ -139,8 +205,10 @@ function renderAll() {
 
 function stepOnce() {
   const result = stepWorld(world, currentProvider())
+  const dynamicsNarratives = applyPopulationDynamics(world)
   pushLog(envLog, result.environmentNarrative)
   for (const item of result.speciesNarratives) pushLog(speciesLog, item)
+  for (const item of dynamicsNarratives) pushLog(speciesLog, item)
   renderAll()
 }
 

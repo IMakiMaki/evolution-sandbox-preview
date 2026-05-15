@@ -147,3 +147,13 @@ https://IMakiMaki.github.io/evolution-sandbox-preview/
 ## License
 
 MIT
+
+## v0.2 更新内容
+
+- 统一随机源，确保相同 seed 可复现；
+- 将种群结算合并到 `stepWorld()`，避免 population / agents / history 不同步；
+- “物种配置”从静态展示升级成可编辑面板，支持调整初始种群、颜色、速度、伪装、繁殖力、新降体、抗性与攻击性等指标；
+- 事件卡从纯字符串升级为结构化对象，支持点击定位相关物种；
+- 趋势图新增绝对数量、相对占比与谱系聚合三种模式；
+- 支持导出当前世界快照为 JSON；
+- 更新 README，新增 `package.json` 和 `tests/smoke.mjs`。
